@@ -187,8 +187,120 @@
     // UI 樣式
     const styles = {
         hidden: `.${IDs.HIDDEN}, .${IDs.HEURISTIC} { display: none !important; }`,
-        review: `.ad-blocked-review { outline: 2px dashed #3498db !important; box-shadow: 0 0 10px #3498db; }`,
         tooltip: `.tooltip { opacity: 0.8; transition: opacity 0.2s; } .tooltip:hover { opacity: 1; }`,
+        popup: `
+            .popup-window {
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: white;
+                padding: 24px;
+                border-radius: 16px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                z-index: 999999;
+                width: 90%;
+                max-width: 600px;
+                max-height: 90vh;
+                overflow-y: auto;
+                display: none;
+                animation: popupFadeIn 0.3s ease-out;
+            }
+            @keyframes popupFadeIn {
+                from { opacity: 0; transform: translate(-50%, -48%); }
+                to { opacity: 1; transform: translate(-50%, -50%); }
+            }
+            .popup-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 999998;
+                display: none;
+                opacity: 0;
+                transition: opacity 0.3s;
+            }
+            .popup-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+                padding-bottom: 16px;
+                border-bottom: 1px solid #eee;
+            }
+            .popup-title {
+                font-size: 20px;
+                font-weight: 600;
+                color: #333;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .popup-close {
+                background: none;
+                border: none;
+                font-size: 24px;
+                cursor: pointer;
+                color: #666;
+                padding: 4px;
+                border-radius: 50%;
+                transition: background 0.2s;
+            }
+            .popup-close:hover {
+                background: #f5f5f5;
+            }
+            .popup-section {
+                background: #f8f9fa;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+            .popup-section-title {
+                font-size: 16px;
+                font-weight: 500;
+                margin-bottom: 12px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .stat-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            .stat-item {
+                background: white;
+                padding: 12px;
+                border-radius: 8px;
+                text-align: center;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: 600;
+                color: #2196F3;
+                margin-bottom: 4px;
+            }
+            .stat-label {
+                font-size: 12px;
+                color: #666;
+            }
+            .learning-progress {
+                width: 100%;
+                height: 6px;
+                background: #e0e0e0;
+                border-radius: 3px;
+                overflow: hidden;
+                margin: 8px 0;
+            }
+            .learning-progress-bar {
+                height: 100%;
+                background: linear-gradient(90deg, #4CAF50, #8BC34A);
+                transition: width 0.3s ease-out;
+            }
+        `,
         notification: `
             .notification {
                 position: fixed;
@@ -770,34 +882,169 @@
         }
     }
 
-    // 切換UI顯示
-    function toggleUI() {
-        const ui = document.getElementById(IDs.UI);
-        const isVisible = ui.style.display !== 'none';
+    // 切換彈出視窗
+    function togglePopup(show) {
+        const popup = document.querySelector('.popup-window');
+        const overlay = document.querySelector('.popup-overlay');
         
-        if (isVisible) {
-            ui.style.opacity = '0';
-            ui.style.transform = 'translateX(20px)';
-            setTimeout(() => ui.style.display = 'none', 300);
-        } else {
-            ui.style.display = 'block';
-            ui.style.left = state.uiPosition.x + 'px';
-            ui.style.top = state.uiPosition.y + 'px';
+        if (show) {
+            overlay.style.display = 'block';
+            popup.style.display = 'block';
+            // 使用 setTimeout 確保 display 變更後再添加動畫
             setTimeout(() => {
-                ui.style.opacity = '1';
-                ui.style.transform = 'translateX(0)';
+                overlay.style.opacity = '1';
+                updateStats();
             }, 10);
+        } else {
+            overlay.style.opacity = '0';
+            popup.style.opacity = '0';
+            popup.style.transform = 'translate(-50%, -48%)';
+            setTimeout(() => {
+                overlay.style.display = 'none';
+                popup.style.display = 'none';
+                // 重置彈出視窗狀態
+                popup.style.opacity = '';
+                popup.style.transform = '';
+            }, 300);
         }
+    }
+
+    // 更新統計數據
+    function updateStats() {
+        const confidenceEl = document.getElementById('confidence-value');
+        const progressEl = document.getElementById('learning-progress');
+        
+        if (confidenceEl && progressEl) {
+            const confidence = Math.round(adLearner.confidence_threshold * 100);
+            const progress = Math.round(
+                (Object.keys(adLearner.patterns.keywords).length +
+                Object.keys(adLearner.patterns.selectors).length +
+                Object.keys(adLearner.patterns.domains).length) / 3
+            );
+            
+            confidenceEl.textContent = confidence + '%';
+            progressEl.style.width = Math.min(100, progress) + '%';
+        }
+        
+        updateUI();
+        updateExclusionsList();
     }
 
     // 建立現代化 UI
     function createModernUI() {
+        // 創建懸浮按鈕
         const fab = document.createElement('div');
         fab.id = IDs.FAB;
         fab.innerHTML = `<div style="font-size:24px">🧠</div>`;
         fab.title = "智慧廣告攔截器";
-        fab.onclick = toggleUI;
+        fab.onclick = () => togglePopup(true);
         document.body.appendChild(fab);
+
+        // 創建彈出視窗遮罩
+        const overlay = document.createElement('div');
+        overlay.className = 'popup-overlay';
+        overlay.onclick = (e) => {
+            if (e.target === overlay) togglePopup(false);
+        };
+        document.body.appendChild(overlay);
+
+        // 創建彈出視窗
+        const popup = document.createElement('div');
+        popup.className = 'popup-window';
+        popup.innerHTML = `
+            <div class="popup-header">
+                <div class="popup-title">
+                    <span style="font-size:24px">🧠</span>
+                    智慧廣告攔截器
+                </div>
+                <button class="popup-close" onclick="togglePopup(false)">×</button>
+            </div>
+
+            <div class="popup-section">
+                <div class="popup-section-title">
+                    <span style="font-size:18px">📊</span>
+                    運行狀態
+                </div>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="${IDs.BADGE}">0</div>
+                        <div class="stat-label">已封鎖廣告</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="${IDs.RULE_COUNT}">0</div>
+                        <div class="stat-label">學習規則數</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="confidence-value">0%</div>
+                        <div class="stat-label">系統置信度</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="popup-section">
+                <div class="popup-section-title">
+                    <span style="font-size:18px">🎯</span>
+                    智能學習
+                </div>
+                <div style="margin-bottom:16px">
+                    <label class="switch">
+                        <input type="checkbox" id="${IDs.TOGGLE}">
+                        <span class="slider"></span>
+                    </label>
+                    <span style="margin-left:8px">啟用啟發式學習</span>
+                </div>
+                <div class="learning-progress">
+                    <div class="learning-progress-bar" id="learning-progress" style="width:0%"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:12px;color:#666">
+                    <span>初始學習</span>
+                    <span>完整訓練</span>
+                </div>
+            </div>
+
+            <div class="popup-section">
+                <div class="popup-section-title">
+                    <span style="font-size:18px">⚙️</span>
+                    進階功能
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <button id="${IDs.BLOCK}" class="action-btn">
+                        🎯 手動選擇
+                    </button>
+                    <button id="${IDs.ADD_EXCLUSION}" class="action-btn" style="background:#3498db">
+                        ⭐ 添加排除
+                    </button>
+                    <button id="${IDs.REVIEW}" style="display:none" class="action-btn">
+                        🤖 智能審核
+                    </button>
+                </div>
+            </div>
+
+            <div class="popup-section">
+                <div class="popup-section-title">
+                    <span style="font-size:18px">🔄</span>
+                    數據管理
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                    <button class="action-btn" data-action="export">
+                        📤 匯出規則
+                    </button>
+                    <button class="action-btn" data-action="import">
+                        📥 匯入規則
+                    </button>
+                    <button class="action-btn" data-action="sync">
+                        ☁️ 同步數據
+                    </button>
+                    <button class="action-btn danger-btn" data-action="clear">
+                        🗑️ 清空數據
+                    </button>
+                </div>
+            </div>
+
+            <div id="${IDs.EXCLUSIONS}" style="margin-top:16px">
+            </div>
+        `;
+        document.body.appendChild(popup);
 
         const ui = document.createElement('div');
         ui.id = IDs.UI;
