@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         智慧廣告攔截器 - 啟發式學習版
 // @namespace    http://tampermonkey.net/
-// @version      5.2
-// @description  啟發式自動學習攔截，效能強化、防偵測升級、視覺優化
+// @version      5.3
+// @description  啟發式自動學習攔截，效能強化、防偵測升級、視覺優化，支援手動排除
 // @author       Gemini 疊代優化
 // @match        *://*/*
 // @grant        GM_setValue
@@ -29,6 +29,8 @@
         RULE_COUNT: genID(),
         TOGGLE: genID(),
         BLOCK: genID(),
+        EXCLUSIONS: genID(), // 新增：排除列表容器ID
+        ADD_EXCLUSION: genID(), // 新增：添加排除按鈕ID
     };
 
     // 關鍵字動態混淆
@@ -43,6 +45,7 @@
         rules: GM_getValue("rules", []),
         labels: GM_getValue("labels", {}),
         siteSettings: GM_getValue("siteSettings", {}),
+        exclusions: GM_getValue("exclusions", {}), // 新增：排除規則儲存
         heuristicBlocked: new Map(),
         removed: [],
         blockedCount: 0,
@@ -472,6 +475,16 @@
             <button id="${IDs.REVIEW}" class="action-btn" style="display:none;margin-top:8px">
                 🤖 審核學習 (0)
             </button>
+
+            <button id="${IDs.ADD_EXCLUSION}" class="action-btn" style="margin-top:8px;background:#3498db">
+                🎯 添加排除規則
+            </button>
+
+            <div style="margin-top:12px;background:#f8f9fa;border-radius:8px;padding:12px">
+                <div style="font-weight:500;margin-bottom:8px">排除列表</div>
+                <div id="${IDs.EXCLUSIONS}" style="max-height:200px;overflow-y:auto">
+                </div>
+            </div>
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px">
                 <button class="action-btn" data-action="export">📤 匯出</button>
