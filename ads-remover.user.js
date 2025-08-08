@@ -733,13 +733,21 @@
             if (e.target.checked) enhancedHeuristicScan();
         };
 
+        // 排除按鈕事件
+        document.getElementById(IDs.ADD_EXCLUSION).onclick = () => {
+            startExclusionMode();
+        };
+
+        // 初始化排除列表
+        updateExclusionsList();
+
         // 按鈕事件
         ui.onclick = e => {
             const action = e.target.dataset.action;
             if (action) {
                 const actions = {
-                    'export': exportRules,
-                    'import': importRules,
+                    'export': exportExclusions,
+                    'import': importExclusions,
                     'sync': syncToCloud,
                     'clear': clearRules
                 };
@@ -793,6 +801,143 @@
         if (state.siteSettings[location.hostname]?.heuristic) {
             enhancedHeuristicScan();
         }
+    }
+
+    // 排除規則相關函數
+    function addExclusion(selector) {
+        const hostname = location.hostname;
+        state.exclusions[hostname] = state.exclusions[hostname] || [];
+        if (!state.exclusions[hostname].includes(selector)) {
+            state.exclusions[hostname].push(selector);
+            GM_setValue("exclusions", state.exclusions);
+            updateExclusionsList();
+            showNotification(`已將 ${selector} 添加到排除列表`, 'success');
+        }
+    }
+
+    function removeExclusion(selector) {
+        const hostname = location.hostname;
+        if (state.exclusions[hostname]) {
+            state.exclusions[hostname] = state.exclusions[hostname].filter(s => s !== selector);
+            if (state.exclusions[hostname].length === 0) {
+                delete state.exclusions[hostname];
+            }
+            GM_setValue("exclusions", state.exclusions);
+            updateExclusionsList();
+            showNotification(`已從排除列表移除 ${selector}`, 'info');
+        }
+    }
+
+    function updateExclusionsList() {
+        const container = document.getElementById(IDs.EXCLUSIONS);
+        if (!container) return;
+
+        const hostname = location.hostname;
+        const exclusions = state.exclusions[hostname] || [];
+        
+        if (exclusions.length === 0) {
+            container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">目前沒有排除規則</div>';
+            return;
+        }
+
+        container.innerHTML = exclusions.map(selector => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:white;margin-bottom:4px;border-radius:4px">
+                <div style="font-size:12px;word-break:break-all;margin-right:8px">${selector}</div>
+                <button class="remove-exclusion" data-selector="${selector}" style="background:none;border:none;cursor:pointer;color:#f44336;padding:4px">
+                    ❌
+                </button>
+            </div>
+        `).join('');
+
+        // 綁定移除按鈕事件
+        container.querySelectorAll('.remove-exclusion').forEach(btn => {
+            btn.onclick = () => removeExclusion(btn.dataset.selector);
+        });
+    }
+
+    // 點擊添加排除規則
+    function startExclusionMode() {
+        const ui = document.getElementById(IDs.UI);
+        if (ui) ui.style.display = 'none';
+        
+        document.body.style.cursor = 'crosshair';
+        showNotification('請點擊要排除的元素', 'info', 10000);
+
+        const clickHandler = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const el = e.target;
+            if (el.id === IDs.UI || el.closest(`#${IDs.UI}`)) return;
+            
+            const selector = getSmartSelector(el);
+            if (selector) {
+                addExclusion(selector);
+            }
+            
+            document.body.style.cursor = '';
+            document.removeEventListener('click', clickHandler, true);
+            if (ui) ui.style.display = 'block';
+        };
+
+        document.addEventListener('click', clickHandler, true);
+    }
+
+    // 導出排除規則
+    function exportExclusions() {
+        const hostname = location.hostname;
+        const exclusions = state.exclusions[hostname] || [];
+        
+        if (exclusions.length === 0) {
+            showNotification('沒有可導出的排除規則', 'warning');
+            return;
+        }
+
+        const data = JSON.stringify({ hostname, exclusions }, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ad-exclusions-${hostname}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        showNotification('排除規則已導出', 'success');
+    }
+
+    // 導入排除規則
+    function importExclusions() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        
+        input.onchange = e => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.hostname && Array.isArray(data.exclusions)) {
+                        state.exclusions[data.hostname] = data.exclusions;
+                        GM_setValue("exclusions", state.exclusions);
+                        updateExclusionsList();
+                        showNotification(`已成功導入 ${data.exclusions.length} 條排除規則`, 'success');
+                    } else {
+                        throw new Error('無效的檔案格式');
+                    }
+                } catch (err) {
+                    showNotification('導入失敗：' + err.message, 'error');
+                }
+            };
+            reader.readAsText(file);
+        };
+        
+        input.click();
     }
 
     // 初始化延遲
