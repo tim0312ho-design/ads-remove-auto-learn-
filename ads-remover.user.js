@@ -65,13 +65,17 @@
         rules: GM_getValue("rules", []),
         labels: GM_getValue("labels", {}),
         siteSettings: GM_getValue("siteSettings", {}),
-        exclusions: GM_getValue("exclusions", {}), // 新增：排除規則儲存
+        exclusions: GM_getValue("exclusions", {}),
         heuristicBlocked: new Map(),
         removed: [],
         blockedCount: 0,
         continuousMode: false,
         scanQueue: new Set(),
         lastScan: 0,
+        notifications: [],
+        uiPosition: GM_getValue("uiPosition", { x: 20, y: 20 }),
+        isDragging: false,
+        dragOffset: { x: 0, y: 0 }
     };
 
     // 效能優化工具
@@ -185,6 +189,32 @@
         hidden: `.${IDs.HIDDEN}, .${IDs.HEURISTIC} { display: none !important; }`,
         review: `.ad-blocked-review { outline: 2px dashed #3498db !important; box-shadow: 0 0 10px #3498db; }`,
         tooltip: `.tooltip { opacity: 0.8; transition: opacity 0.2s; } .tooltip:hover { opacity: 1; }`,
+        notification: `
+            .notification {
+                position: fixed;
+                bottom: 20px;
+                left: 20px;
+                background: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                font-size: 14px;
+                z-index: 999999;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                animation: slideUp 0.3s ease-out;
+                max-width: 300px;
+            }
+            .notification.success { border-left: 4px solid #4CAF50; }
+            .notification.info { border-left: 4px solid #2196F3; }
+            .notification.warning { border-left: 4px solid #FFC107; }
+            .notification.error { border-left: 4px solid #F44336; }
+            @keyframes slideUp {
+                from { transform: translateY(100%); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+        `,
         fab: `
             #${IDs.FAB} {
                 position: fixed;
@@ -493,6 +523,82 @@
         });
     }, 500);
 
+    // 通知系統
+    function showNotification(message, type = 'info', duration = 3000) {
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.innerHTML = `
+            <span style="font-size:16px">${
+                type === 'success' ? '✅' :
+                type === 'info' ? 'ℹ️' :
+                type === 'warning' ? '⚠️' :
+                type === 'error' ? '❌' : 'ℹ️'
+            }</span>
+            <span>${message}</span>
+        `;
+        document.body.appendChild(notification);
+        
+        state.notifications.push(notification);
+        if (state.notifications.length > 3) {
+            const oldNotification = state.notifications.shift();
+            oldNotification.remove();
+        }
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transform = 'translateY(20px)';
+            notification.style.transition = 'all 0.3s ease-out';
+            setTimeout(() => {
+                notification.remove();
+                state.notifications = state.notifications.filter(n => n !== notification);
+            }, 300);
+        }, duration);
+
+        return notification;
+    }
+
+    // 拖曳功能
+    function makeElementDraggable(el) {
+        const header = el.querySelector('h2') || el;
+        
+        header.onmousedown = e => {
+            if (e.button !== 0) return; // 只處理左鍵點擊
+            
+            state.isDragging = true;
+            state.dragOffset.x = e.clientX - el.offsetLeft;
+            state.dragOffset.y = e.clientY - el.offsetTop;
+            
+            const onMouseMove = e => {
+                if (!state.isDragging) return;
+                
+                let x = e.clientX - state.dragOffset.x;
+                let y = e.clientY - state.dragOffset.y;
+                
+                // 確保不會超出視窗範圍
+                x = Math.max(0, Math.min(x, window.innerWidth - el.offsetWidth));
+                y = Math.max(0, Math.min(y, window.innerHeight - el.offsetHeight));
+                
+                el.style.left = x + 'px';
+                el.style.top = y + 'px';
+                
+                state.uiPosition = { x, y };
+                GM_setValue('uiPosition', state.uiPosition);
+            };
+            
+            const onMouseUp = () => {
+                state.isDragging = false;
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+            
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+        
+        // 防止拖曳時選中文字
+        header.style.userSelect = 'none';
+    }
+
     // UI 更新
     function updateUI() {
         const badge = document.getElementById(IDs.BADGE);
@@ -510,6 +616,26 @@
             btn.textContent = `🤖 審核學習 (${count})`;
             btn.style.display = count > 0 ? 'block' : 'none';
             btn.style.background = count > 0 ? '#3498db' : '';
+        }
+    }
+
+    // 切換UI顯示
+    function toggleUI() {
+        const ui = document.getElementById(IDs.UI);
+        const isVisible = ui.style.display !== 'none';
+        
+        if (isVisible) {
+            ui.style.opacity = '0';
+            ui.style.transform = 'translateX(20px)';
+            setTimeout(() => ui.style.display = 'none', 300);
+        } else {
+            ui.style.display = 'block';
+            ui.style.left = state.uiPosition.x + 'px';
+            ui.style.top = state.uiPosition.y + 'px';
+            setTimeout(() => {
+                ui.style.opacity = '1';
+                ui.style.transform = 'translateX(0)';
+            }, 10);
         }
     }
 
