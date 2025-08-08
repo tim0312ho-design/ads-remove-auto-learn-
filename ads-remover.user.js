@@ -164,6 +164,7 @@
     const styles = {
         hidden: `.${IDs.HIDDEN}, .${IDs.HEURISTIC} { display: none !important; }`,
         review: `.ad-blocked-review { outline: 2px dashed #3498db !important; box-shadow: 0 0 10px #3498db; }`,
+        tooltip: `.tooltip { opacity: 0.8; transition: opacity 0.2s; } .tooltip:hover { opacity: 1; }`,
         fab: `
             #${IDs.FAB} {
                 position: fixed;
@@ -468,20 +469,41 @@
                 </label>
             </div>
 
-            <button id="${IDs.BLOCK}" class="action-btn">
-                👆 點擊封鎖
-            </button>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                <button id="${IDs.BLOCK}" class="action-btn" style="position:relative;padding-left:36px">
+                    <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%)">🎯</span>
+                    點擊封鎖
+                </button>
+                <div class="tooltip" style="background:#f8f9fa;padding:8px;border-radius:6px;font-size:12px;color:#666">
+                    點擊此按鈕，然後點選網頁上的廣告元素進行封鎖
+                </div>
+            </div>
 
-            <button id="${IDs.REVIEW}" class="action-btn" style="display:none;margin-top:8px">
-                🤖 審核學習 (0)
-            </button>
+            <div id="${IDs.REVIEW}" style="display:none;margin-top:8px">
+                <button class="action-btn" style="position:relative;padding-left:36px">
+                    <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%)">🤖</span>
+                    審核學習 (0)
+                </button>
+                <div class="tooltip" style="background:#f8f9fa;padding:8px;border-radius:6px;font-size:12px;color:#666;margin-top:4px">
+                    系統自動識別的廣告，需要您的確認
+                </div>
+            </div>
 
-            <button id="${IDs.ADD_EXCLUSION}" class="action-btn" style="margin-top:8px;background:#3498db">
-                🎯 添加排除規則
-            </button>
+            <div style="margin-top:8px">
+                <button id="${IDs.ADD_EXCLUSION}" class="action-btn" style="position:relative;padding-left:36px;background:#3498db">
+                    <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%)">⭐</span>
+                    添加排除規則
+                </button>
+                <div class="tooltip" style="background:#f8f9fa;padding:8px;border-radius:6px;font-size:12px;color:#666;margin-top:4px">
+                    將特定元素加入白名單，避免被誤封鎖
+                </div>
+            </div>
 
             <div style="margin-top:12px;background:#f8f9fa;border-radius:8px;padding:12px">
-                <div style="font-weight:500;margin-bottom:8px">排除列表</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <span style="font-weight:500">排除列表</span>
+                    <span style="font-size:12px;color:#666">(不會被封鎖的元素)</span>
+                </div>
                 <div id="${IDs.EXCLUSIONS}" style="max-height:200px;overflow-y:auto">
                 </div>
             </div>
