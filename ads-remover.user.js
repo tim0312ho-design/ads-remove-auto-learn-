@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         智慧廣告攔截器 - 啟發式學習版
 // @namespace    http://tampermonkey.net/
-// @version      5.3
-// @description  啟發式自動學習攔截，效能強化、防偵測升級、視覺優化，支援手動排除
+// @version      5.5
+// @description  啟發式自動學習攔截，效能強化、防偵測升級、視覺優化，支援手動排除，新增暫停與復原功能，支援框選區域封鎖
 // @author       Gemini 疊代優化
 // @match        *://*/*
 // @grant        GM_setValue
@@ -75,7 +75,23 @@
         notifications: [],
         uiPosition: GM_getValue("uiPosition", { x: 20, y: 20 }),
         isDragging: false,
-        dragOffset: { x: 0, y: 0 }
+        dragOffset: { x: 0, y: 0 },
+        isPaused: GM_getValue("isPaused", false),
+        undoStack: [],
+        redoStack: [],
+        // 安全限制設定
+        safetyLimits: {
+            maxBlocksPerPage: 50,            // 每頁最大封鎖數
+            minContentRatio: 0.3,            // 最小內容保留比例
+            criticalSelectors: [             // 重要元素選擇器
+                'main', 'article', 'header', 'footer', 'nav',
+                '[role="main"]', '[role="article"]', '[role="navigation"]'
+            ],
+            unsafeClasses: [                 // 不安全的類名
+                'container', 'wrapper', 'content', 'main', 'page',
+                'site-content', 'main-content'
+            ]
+        }
     };
 
     // 效能優化工具
@@ -188,6 +204,32 @@
     const styles = {
         hidden: `.${IDs.HIDDEN}, .${IDs.HEURISTIC} { display: none !important; }`,
         tooltip: `.tooltip { opacity: 0.8; transition: opacity 0.2s; } .tooltip:hover { opacity: 1; }`,
+        selection: `
+            .selection-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.1);
+                z-index: 999997;
+                cursor: crosshair;
+                display: none;
+            }
+            .selection-box {
+                position: absolute;
+                border: 2px solid #2196F3;
+                background: rgba(33, 150, 243, 0.1);
+                z-index: 999998;
+            }
+            .selection-target {
+                position: absolute;
+                border: 2px solid #4CAF50;
+                background: rgba(76, 175, 80, 0.1);
+                z-index: 999998;
+                pointer-events: none;
+            }
+        `,
         popup: `
             .popup-window {
                 position: fixed;
@@ -475,6 +517,53 @@
     // 註冊所有樣式
     Object.values(styles).forEach(style => GM_addStyle(style));
 
+    // 檢查元素是否安全可封鎖
+    function isSafeToBlock(el, selector) {
+        // 檢查是否超過每頁封鎖限制
+        if (state.blockedCount >= state.safetyLimits.maxBlocksPerPage) {
+            showNotification('已達到此頁面的最大封鎖數量限制', 'warning');
+            return false;
+        }
+
+        // 檢查是否是重要元素
+        if (state.safetyLimits.criticalSelectors.some(sel => el.matches(sel))) {
+            showNotification('此元素可能是網站的重要部分，已取消封鎖', 'warning');
+            return false;
+        }
+
+        // 檢查元素大小
+        const rect = el.getBoundingClientRect();
+        const viewportArea = window.innerWidth * window.innerHeight;
+        const elementArea = rect.width * rect.height;
+        
+        if (elementArea > viewportArea * state.safetyLimits.minContentRatio) {
+            // 如果元素過大，顯示確認對話框
+            if (!confirm('此元素佔據頁面較大面積，確定要封鎖嗎？這可能會影響網站正常使用。')) {
+                return false;
+            }
+        }
+
+        // 檢查是否包含不安全的類名
+        const classList = Array.from(el.classList);
+        if (state.safetyLimits.unsafeClasses.some(cls => 
+            classList.some(c => c.toLowerCase().includes(cls.toLowerCase())))) {
+            if (!confirm('此元素可能包含重要內容，確定要封鎖嗎？')) {
+                return false;
+            }
+        }
+
+        // 檢查是否包含重要子元素
+        const hasImportantChildren = Array.from(el.children).some(child => 
+            state.safetyLimits.criticalSelectors.some(sel => child.matches(sel)));
+        
+        if (hasImportantChildren) {
+            showNotification('此元素包含重要內容，已取消封鎖', 'warning');
+            return false;
+        }
+
+        return true;
+    }
+
     // 元素封鎖處理
     function blockElement(el, selector, isHeuristic = false, reason = '') {
         try {
@@ -482,6 +571,9 @@
 
             // 檢查是否在排除列表中
             if (state.exclusions[location.hostname]?.includes(selector)) return;
+
+            // 檢查是否安全可封鎖
+            if (!isSafeToBlock(el, selector)) return;
 
             // 檢查iframe來源
             if (el.tagName === 'IFRAME') {
@@ -876,9 +968,39 @@
         const count = state.heuristicBlocked.size;
         
         if (btn) {
-            btn.textContent = `🤖 審核學習 (${count})`;
-            btn.style.display = count > 0 ? 'block' : 'none';
-            btn.style.background = count > 0 ? '#3498db' : '';
+            btn.textContent = `🔍 審核待確認項目 (${count})`;
+            if (count > 0) {
+                btn.style.display = 'block';
+                btn.style.background = '#3498db';
+                btn.style.color = 'white';
+                btn.style.padding = '12px';
+                btn.style.borderRadius = '6px';
+                btn.style.cursor = 'pointer';
+                btn.style.transition = 'background 0.2s';
+                
+                // 添加閃爍動畫
+                btn.style.animation = 'pulse 2s infinite';
+                if (!document.querySelector('.pulse-animation')) {
+                    const style = document.createElement('style');
+                    style.className = 'pulse-animation';
+                    style.textContent = `
+                        @keyframes pulse {
+                            0% { transform: scale(1); }
+                            50% { transform: scale(1.02); }
+                            100% { transform: scale(1); }
+                        }
+                    `;
+                    document.head.appendChild(style);
+                }
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+        
+        // 更新統計數據
+        const statsEl = document.querySelector('.learning-stats');
+        if (statsEl) {
+            statsEl.textContent = `智能識別: ${count}個待確認`;
         }
     }
 
@@ -1004,6 +1126,26 @@
 
             <div class="popup-section">
                 <div class="popup-section-title">
+                    <span style="font-size:18px">🤖</span>
+                    智能學習
+                </div>
+                <div style="margin-bottom:16px">
+                    <label class="switch">
+                        <input type="checkbox" id="${IDs.TOGGLE}">
+                        <span class="slider"></span>
+                    </label>
+                    <span style="margin-left:8px">啟用智能學習</span>
+                </div>
+                <div id="${IDs.REVIEW}" style="display:none" class="action-btn">
+                    🔍 審核待確認項目 (0)
+                </div>
+                <div style="font-size:12px;color:#666;margin-top:8px;padding:8px;background:#f8f9fa;border-radius:6px">
+                    智能學習系統會自動識別和標記可疑的廣告元素，等待您的確認。
+                </div>
+            </div>
+
+            <div class="popup-section">
+                <div class="popup-section-title">
                     <span style="font-size:18px">⚙️</span>
                     進階功能
                 </div>
@@ -1013,9 +1155,6 @@
                     </button>
                     <button id="${IDs.ADD_EXCLUSION}" class="action-btn" style="background:#3498db">
                         ⭐ 添加排除
-                    </button>
-                    <button id="${IDs.REVIEW}" style="display:none" class="action-btn">
-                        🤖 智能審核
                     </button>
                 </div>
             </div>
@@ -1120,15 +1259,26 @@
 
         document.body.appendChild(ui);
 
-        // 事件綁定
-        document.getElementById(IDs.TOGGLE).checked = state.siteSettings[location.hostname]?.heuristic || false;
-        document.getElementById(IDs.TOGGLE).onchange = e => {
-            const host = location.hostname;
-            state.siteSettings[host] = state.siteSettings[host] || {};
-            state.siteSettings[host].heuristic = e.target.checked;
-            GM_setValue("siteSettings", state.siteSettings);
-            showNotification(`啟發式引擎已${e.target.checked ? '開啟' : '關閉'}`, 'info');
-            if (e.target.checked) enhancedHeuristicScan();
+        // 智能學習開關事件綁定
+        const toggleCheckbox = document.getElementById(IDs.TOGGLE);
+        if (toggleCheckbox) {
+            toggleCheckbox.checked = state.siteSettings[location.hostname]?.heuristic || false;
+            toggleCheckbox.onchange = e => {
+                const host = location.hostname;
+                state.siteSettings[host] = state.siteSettings[host] || {};
+                state.siteSettings[host].heuristic = e.target.checked;
+                GM_setValue("siteSettings", state.siteSettings);
+                
+                if (e.target.checked) {
+                    showNotification('已開啟智能學習模式', 'success');
+                    enhancedHeuristicScan();
+                } else {
+                    showNotification('已關閉智能學習模式', 'info');
+                }
+                
+                // 更新審核按鈕狀態
+                updateReviewButton();
+            };
         };
 
         // 排除按鈕事件
@@ -1153,15 +1303,299 @@
             }
         };
 
+        // 框選功能
+    function startSelectionMode() {
+        const ui = document.getElementById(IDs.UI);
+        const popup = document.querySelector('.popup-window');
+        let overlay, selectionBox, targetHighlight;
+        let startX, startY;
+        let isSelecting = false;
+
+        // 隱藏 UI 和彈出視窗
+        if (ui) ui.style.display = 'none';
+        if (popup) {
+            popup.style.display = 'none';
+            document.querySelector('.popup-overlay').style.display = 'none';
+        }
+
+        // 創建選擇層
+        overlay = document.createElement('div');
+        overlay.className = 'selection-overlay';
+        document.body.appendChild(overlay);
+        overlay.style.display = 'block';
+
+        showNotification('請拖曳選擇要封鎖的區域', 'info', 10000);
+
+        function createSelectionBox(x, y) {
+            selectionBox = document.createElement('div');
+            selectionBox.className = 'selection-box';
+            selectionBox.style.left = x + 'px';
+            selectionBox.style.top = y + 'px';
+            overlay.appendChild(selectionBox);
+        }
+
+        function updateSelectionBox(e) {
+            if (!isSelecting) return;
+            
+            const currentX = e.clientX;
+            const currentY = e.clientY;
+            
+            const width = Math.abs(currentX - startX);
+            const height = Math.abs(currentY - startY);
+            const left = Math.min(currentX, startX);
+            const top = Math.min(currentY, startY);
+            
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+
+            // 高亮顯示框選區域內的元素
+            const elements = document.elementsFromPoint(currentX, currentY);
+            elements.forEach(el => {
+                if (el !== overlay && el !== selectionBox && !el.closest(`#${IDs.UI}`)) {
+                    const rect = el.getBoundingClientRect();
+                    if (!targetHighlight) {
+                        targetHighlight = document.createElement('div');
+                        targetHighlight.className = 'selection-target';
+                        overlay.appendChild(targetHighlight);
+                    }
+                    targetHighlight.style.left = rect.left + 'px';
+                    targetHighlight.style.top = rect.top + 'px';
+                    targetHighlight.style.width = rect.width + 'px';
+                    targetHighlight.style.height = rect.height + 'px';
+                }
+            });
+        }
+
+        function endSelection(e) {
+            if (!isSelecting) return;
+            isSelecting = false;
+
+            const endX = e.clientX;
+            const endY = e.clientY;
+            const selectedArea = {
+                left: Math.min(startX, endX),
+                top: Math.min(startY, endY),
+                right: Math.max(startX, endX),
+                bottom: Math.max(startY, endY)
+            };
+
+            // 找出框選區域內的所有元素
+            const elements = [];
+            document.elementsFromPoint(
+                (selectedArea.left + selectedArea.right) / 2,
+                (selectedArea.top + selectedArea.bottom) / 2
+            ).forEach(el => {
+                if (el !== overlay && el !== selectionBox && !el.closest(`#${IDs.UI}`)) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.left < selectedArea.right &&
+                        rect.right > selectedArea.left &&
+                        rect.top < selectedArea.bottom &&
+                        rect.bottom > selectedArea.top) {
+                        elements.push(el);
+                    }
+                }
+            });
+
+            // 封鎖選中的元素
+            elements.forEach(el => {
+                const selector = getSmartSelector(el);
+                if (selector && !state.rules.includes(selector)) {
+                    state.rules.push(selector);
+                    GM_setValue("rules", state.rules);
+                    blockElement(el, selector);
+                    addToUndoStack({
+                        type: 'block',
+                        selector: selector,
+                        timestamp: Date.now()
+                    });
+                }
+            });
+
+            if (elements.length > 0) {
+                showNotification(`已封鎖 ${elements.length} 個元素`, 'success');
+            }
+
+            // 清理
+            overlay.remove();
+            if (ui) ui.style.display = 'block';
+            document.removeEventListener('mousemove', updateSelectionBox);
+            document.removeEventListener('mouseup', endSelection);
+        }
+
+        overlay.addEventListener('mousedown', e => {
+            startX = e.clientX;
+            startY = e.clientY;
+            isSelecting = true;
+            createSelectionBox(startX, startY);
+            document.addEventListener('mousemove', updateSelectionBox);
+            document.addEventListener('mouseup', endSelection);
+        });
+    }
+
+    // 手動選擇按鈕事件
+    document.getElementById(IDs.BLOCK).onclick = () => {
+        const blockModeSelection = document.createElement('div');
+        blockModeSelection.style.position = 'fixed';
+        blockModeSelection.style.top = '50%';
+        blockModeSelection.style.left = '50%';
+        blockModeSelection.style.transform = 'translate(-50%, -50%)';
+        blockModeSelection.style.background = 'white';
+        blockModeSelection.style.padding = '20px';
+        blockModeSelection.style.borderRadius = '12px';
+        blockModeSelection.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
+        blockModeSelection.style.zIndex = '999999';
+        blockModeSelection.innerHTML = `
+            <h3 style="margin:0 0 16px;font-size:18px">選擇封鎖模式</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <button class="action-btn" id="singleSelect">
+                    🎯 單點選擇
+                </button>
+                <button class="action-btn" id="areaSelect">
+                    ⬚ 框選區域
+                </button>
+            </div>
+        `;
+        document.body.appendChild(blockModeSelection);
+
+        document.getElementById('singleSelect').onclick = () => {
+            blockModeSelection.remove();
+            const ui = document.getElementById(IDs.UI);
+            const popup = document.querySelector('.popup-window');
+            
+            document.body.style.cursor = 'crosshair';
+            showNotification('請點擊要封鎖的元素', 'info', 10000);
+            
+            function clickHandler(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const el = e.target;
+                if (el.id === IDs.UI || el.closest(`#${IDs.UI}`)) return;
+                
+                const selector = getSmartSelector(el);
+            if (selector) {
+                if (!state.rules.includes(selector)) {
+                    state.rules.push(selector);
+                    GM_setValue("rules", state.rules);
+                    blockElement(el, selector);
+                    // 添加到復原堆疊
+                    addToUndoStack({
+                        type: 'block',
+                        selector: selector,
+                        timestamp: Date.now()
+                    });
+                    showNotification('已封鎖元素', 'success');
+                }
+            }                // 恢復 UI 和游標
+                document.body.style.cursor = '';
+                if (ui) ui.style.display = 'block';
+                document.removeEventListener('click', clickHandler, true);
+            }
+            
+            document.addEventListener('click', clickHandler, true);
+        };
+
         makeElementDraggable(ui);
+        updateUI();
+    }
+
+    // 復原和重做功能
+    function addToUndoStack(action) {
+        state.undoStack.push(action);
+        state.redoStack = []; // 清空重做堆疊
+        if (state.undoStack.length > 50) { // 限制堆疊大小
+            state.undoStack.shift();
+        }
+    }
+
+    function undo() {
+        if (state.undoStack.length === 0) {
+            showNotification('沒有可以復原的操作', 'info');
+            return;
+        }
+
+        const action = state.undoStack.pop();
+        state.redoStack.push(action);
+
+        if (action.type === 'block') {
+            // 恢復被封鎖的元素
+            const selector = action.selector;
+            document.querySelectorAll('.' + IDs.HIDDEN + ', .' + IDs.HEURISTIC).forEach(el => {
+                if (getSmartSelector(el) === selector) {
+                    el.classList.remove(IDs.HIDDEN, IDs.HEURISTIC);
+                    state.blockedCount = Math.max(0, state.blockedCount - 1);
+                }
+            });
+            // 從規則中移除
+            state.rules = state.rules.filter(r => r !== selector);
+            GM_setValue("rules", state.rules);
+        }
+
+        updateUI();
+        showNotification('已復原上一個操作', 'success');
+    }
+
+    function redo() {
+        if (state.redoStack.length === 0) {
+            showNotification('沒有可以重做的操作', 'info');
+            return;
+        }
+
+        const action = state.redoStack.pop();
+        state.undoStack.push(action);
+
+        if (action.type === 'block') {
+            // 重新封鎖元素
+            const selector = action.selector;
+            document.querySelectorAll(selector).forEach(el => {
+                blockElement(el, selector);
+            });
+            // 重新添加規則
+            if (!state.rules.includes(selector)) {
+                state.rules.push(selector);
+                GM_setValue("rules", state.rules);
+            }
+        }
+
+        updateUI();
+        showNotification('已重做操作', 'success');
+    }
+
+    // 暫停和恢復功能
+    function togglePause() {
+        state.isPaused = !state.isPaused;
+        GM_setValue("isPaused", state.isPaused);
+        
+        // 更新所有已封鎖元素的可見性
+        document.querySelectorAll('.' + IDs.HIDDEN + ', .' + IDs.HEURISTIC).forEach(el => {
+            el.style.display = state.isPaused ? '' : 'none';
+        });
+        
+        showNotification(
+            state.isPaused ? '已暫停廣告封鎖' : '已恢復廣告封鎖',
+            state.isPaused ? 'warning' : 'success'
+        );
+        
         updateUI();
     }
 
     // 初始化
     function initialize() {
+        // 註冊 Tampermonkey 選單
+        GM_registerMenuCommand('⏪ 復原上一個操作', undo);
+        GM_registerMenuCommand('⏩ 重做上一個操作', redo);
+        GM_registerMenuCommand(
+            state.isPaused ? '▶️ 恢復廣告封鎖' : '⏸️ 暫停廣告封鎖',
+            togglePause
+        );
+
         createModernUI();
         
         const observer = new MutationObserver(mutations => {
+            if (state.isPaused) return; // 暫停狀態下不處理
+            
             mutations.forEach(mutation => {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === 1 && ['DIV','IFRAME','SECTION'].includes(node.nodeName)) {
@@ -1182,8 +1616,10 @@
 
         observer.observe(document.body, { childList: true, subtree: true });
         setTimeout(() => {
-            applyRules();
-            enhancedHeuristicScan();
+            if (!state.isPaused) {
+                applyRules();
+                enhancedHeuristicScan();
+            }
         }, 500 + Math.random() * 1000);
     }
 
