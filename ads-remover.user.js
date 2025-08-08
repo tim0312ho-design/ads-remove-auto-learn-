@@ -415,20 +415,17 @@
                 // 智能選擇器
                 const selector = getSmartSelector(el);
                 if (!state.rules.includes(selector) && !state.heuristicBlocked.has(el)) {
-                    const matchedKeyword = KEYWORDS.find(k => 
-                        el.className?.includes(k) || 
-                        el.id?.includes(k) ||
-                        el.getAttribute('role')?.includes(k) ||
-                        el.getAttribute('aria-label')?.includes(k)
-                    );
+                    const analysis = adLearner.calculateConfidence(el);
                     
-                    state.heuristicBlocked.set(el, {
-                        reason: `關鍵字匹配 (${matchedKeyword})`,
-                        selector,
-                        confidence: calculateConfidence(el)
-                    });
-                    
-                    blockElement(el, selector, true);
+                    if (analysis.isLikelyAd) {
+                        state.heuristicBlocked.set(el, {
+                            reason: analysis.reasons.join('\n'),
+                            selector,
+                            confidence: analysis.score
+                        });
+                        
+                        blockElement(el, selector, true);
+                    }
                 }
             } catch {}
         });
@@ -455,64 +452,218 @@
         updateReviewButton();
     }
 
-    // 計算置信度
-    function calculateConfidence(el) {
-        let score = 0;
-        let reasons = [];
-        
-        // 關鍵字匹配數
-        const text = (el.className + ' ' + el.id + ' ' + 
-                     el.getAttribute('role') + ' ' + 
-                     el.getAttribute('aria-label') + ' ' +
-                     el.getAttribute('data-ad-slot') + ' ' +  // 新增: 檢查廣告相關屬性
-                     el.getAttribute('data-ad-client'))
-            .toLowerCase();
-        const matchedKeywords = KEYWORDS.filter(k => text.includes(k));
-        if (matchedKeywords.length > 0) {
-            score += matchedKeywords.length * 0.2;
-            reasons.push(`關鍵字匹配: ${matchedKeywords.join(', ')}`);
+    // 廣告模式學習系統
+    class AdPatternLearner {
+        constructor() {
+            this.patterns = GM_getValue('learned_patterns', {
+                keywords: new Set(),
+                selectors: new Set(),
+                domains: new Set(),
+                sizes: [],
+                positions: [],
+                behaviors: new Set()
+            });
+            this.confidence_threshold = 0.75;
+            this.learning_rate = 0.1;
         }
 
-        // 位置評分
-        const rect = el.getBoundingClientRect();
-        if (rect.top < window.innerHeight * 0.3) {
-            score += 0.1;
-            reasons.push('頂部位置');
-        }
-        if (rect.right > window.innerWidth * 0.7) {
-            score += 0.1;
-            reasons.push('右側位置');
-        }
+        learn(el, isAd) {
+            if (!el) return;
 
-        // 大小評分
-        const area = rect.width * rect.height;
-        if (area > 10000 && area < 200000) {
-            score += 0.1;
-            reasons.push('典型廣告大小');
-        }
-
-        // iframe 和腳本評分
-        if (el.tagName === 'IFRAME') {
-            score += 0.2;
-            reasons.push('iframe元素');
-            try {
-                const src = new URL(el.src);
-                if (DOMAINS.some(d => src.hostname.match(d))) {
-                    score += 0.3;
-                    reasons.push(`可疑域名: ${src.hostname}`);
+            // 學習關鍵字模式
+            const text = this.extractText(el);
+            const words = text.split(/\W+/).filter(w => w.length > 3);
+            words.forEach(word => {
+                if (isAd) {
+                    this.patterns.keywords.add(word.toLowerCase());
+                } else {
+                    this.patterns.keywords.delete(word.toLowerCase());
                 }
-            } catch {}
-        } else if (el.tagName === 'SCRIPT') {
-            try {
-                const src = new URL(el.src);
-                if (DOMAINS.some(d => src.hostname.match(d))) {
-                    score += 0.4;
-                    reasons.push(`追蹤腳本: ${src.hostname}`);
-                }
-            } catch {}
+            });
 
-        return Math.min(score, 1);
+            // 學習選擇器模式
+            const selector = getSmartSelector(el);
+            if (isAd) {
+                this.patterns.selectors.add(selector);
+            } else {
+                this.patterns.selectors.delete(selector);
+            }
+
+            // 學習大小模式
+            const rect = el.getBoundingClientRect();
+            const size = { width: rect.width, height: rect.height };
+            if (isAd) {
+                this.patterns.sizes.push(size);
+                if (this.patterns.sizes.length > 100) {
+                    this.patterns.sizes.shift();
+                }
+            }
+
+            // 學習位置模式
+            const position = {
+                top: rect.top / window.innerHeight,
+                right: rect.right / window.innerWidth
+            };
+            if (isAd) {
+                this.patterns.positions.push(position);
+                if (this.patterns.positions.length > 100) {
+                    this.patterns.positions.shift();
+                }
+            }
+
+            // 學習域名模式
+            if (el.tagName === 'IFRAME' || el.tagName === 'SCRIPT') {
+                try {
+                    const src = new URL(el.src);
+                    if (isAd) {
+                        this.patterns.domains.add(src.hostname);
+                    } else {
+                        this.patterns.domains.delete(src.hostname);
+                    }
+                } catch {}
+            }
+
+            // 保存學習結果
+            GM_setValue('learned_patterns', this.patterns);
+        }
+
+        extractText(el) {
+            return (el.className + ' ' + 
+                   el.id + ' ' + 
+                   el.getAttribute('role') + ' ' + 
+                   el.getAttribute('aria-label') + ' ' +
+                   el.getAttribute('data-ad-slot') + ' ' +
+                   el.getAttribute('data-ad-client') + ' ' +
+                   el.getAttribute('data-ad-layout') + ' ' +
+                   el.getAttribute('data-ad-format'))
+                .toLowerCase();
+        }
+
+        calculateConfidence(el) {
+            let score = 0;
+            let reasons = [];
+            
+            // 關鍵字評分
+            const text = this.extractText(el);
+            const words = text.split(/\W+/).filter(w => w.length > 3);
+            const matchedKeywords = words.filter(w => 
+                this.patterns.keywords.has(w) || 
+                KEYWORDS.some(k => w.includes(k))
+            );
+            if (matchedKeywords.length > 0) {
+                const keywordScore = matchedKeywords.length * 0.15;
+                score += keywordScore;
+                reasons.push(`關鍵字匹配 (${keywordScore.toFixed(2)}): ${matchedKeywords.join(', ')}`);
+            }
+
+            // 選擇器評分
+            const selector = getSmartSelector(el);
+            if (this.patterns.selectors.has(selector)) {
+                score += 0.3;
+                reasons.push('選擇器模式匹配 (0.30)');
+            }
+
+            // 大小評分
+            const rect = el.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (this.patterns.sizes.length > 0) {
+                const sizeSimilarity = this.patterns.sizes.some(s => 
+                    Math.abs(s.width - rect.width) < 50 && 
+                    Math.abs(s.height - rect.height) < 50
+                );
+                if (sizeSimilarity) {
+                    score += 0.15;
+                    reasons.push('尺寸模式匹配 (0.15)');
+                }
+            } else if (area > 10000 && area < 200000) {
+                score += 0.1;
+                reasons.push('典型廣告大小 (0.10)');
+            }
+
+            // 位置評分
+            const relativePosition = {
+                top: rect.top / window.innerHeight,
+                right: rect.right / window.innerWidth
+            };
+            if (this.patterns.positions.length > 0) {
+                const positionSimilarity = this.patterns.positions.some(p =>
+                    Math.abs(p.top - relativePosition.top) < 0.1 &&
+                    Math.abs(p.right - relativePosition.right) < 0.1
+                );
+                if (positionSimilarity) {
+                    score += 0.15;
+                    reasons.push('位置模式匹配 (0.15)');
+                }
+            } else {
+                if (rect.top < window.innerHeight * 0.3) {
+                    score += 0.05;
+                    reasons.push('頂部位置 (0.05)');
+                }
+                if (rect.right > window.innerWidth * 0.7) {
+                    score += 0.05;
+                    reasons.push('右側位置 (0.05)');
+                }
+            }
+
+            // iframe 和腳本評分
+            if (el.tagName === 'IFRAME' || el.tagName === 'SCRIPT') {
+                try {
+                    const src = new URL(el.src);
+                    if (this.patterns.domains.has(src.hostname)) {
+                        score += 0.3;
+                        reasons.push(`已知廣告域名 (0.30): ${src.hostname}`);
+                    } else if (DOMAINS.some(d => src.hostname.match(d))) {
+                        score += 0.25;
+                        reasons.push(`可疑域名 (0.25): ${src.hostname}`);
+                    }
+                } catch {}
+
+                }
+
+                // 行為模式評分
+                const hasClickHandler = el.onclick || el.addEventListener;
+                const hasAnimation = getComputedStyle(el).animation !== 'none' ||
+                                   getComputedStyle(el).transition !== 'none';
+                if (hasClickHandler) {
+                    score += 0.1;
+                    reasons.push('具有點擊事件 (0.10)');
+                }
+                if (hasAnimation) {
+                    score += 0.05;
+                    reasons.push('具有動畫效果 (0.05)');
+                }
+
+                return {
+                    score: Math.min(score, 1),
+                    reasons,
+                    isLikelyAd: score >= this.confidence_threshold
+                };
+            }
+
+            // 反饋處理
+            processFeedback(el, wasCorrect) {
+                if (wasCorrect) {
+                    this.confidence_threshold = Math.max(
+                        0.6,
+                        this.confidence_threshold - this.learning_rate
+                    );
+                } else {
+                    this.confidence_threshold = Math.min(
+                        0.9,
+                        this.confidence_threshold + this.learning_rate
+                    );
+                }
+                
+                // 更新學習率
+                this.learning_rate = Math.max(0.05, this.learning_rate * 0.95);
+                
+                // 保存新的閾值
+                GM_setValue('confidence_threshold', this.confidence_threshold);
+            }
     }
+
+    // 初始化學習系統
+    const adLearner = new AdPatternLearner();
 
     // 效能優化的規則套用
     const applyRules = utils.throttle(() => {
