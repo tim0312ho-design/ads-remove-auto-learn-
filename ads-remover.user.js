@@ -34,11 +34,31 @@
     };
 
     // 關鍵字動態混淆
-    const KEYWORDS = ['ad','ads','adv','advert','sponsor','promo','banner','gg-ad','adsbygoogle','publicidade','werbung','reklama','publicité','annons','বিজ্ঞাপন','広告','광고']
-        .map(k => k.split('').map(c => c === 'a' ? '@' : c === 'o' ? '0' : c).join(''));
+    const KEYWORDS = [
+        // 基本廣告關鍵字
+        'ad', 'ads', 'adv', 'advert', 'sponsor', 'promo', 'banner', 'gg-ad', 'adsbygoogle',
+        // 不同語言
+        'publicidade', 'werbung', 'reklama', 'publicité', 'annons', 'বিজ্ঞাপন', '広告', '광고',
+        // 分析與追蹤
+        'analytics', 'tracking', 'stats', 'metric', 'monitor',
+        // 錯誤追蹤
+        'bugsnag', 'sentry', 'error-track',
+        // 社交媒體追蹤
+        'pixel', 'social-track', 'share-track'
+    ].map(k => k.split('').map(c => c === 'a' ? '@' : c === 'o' ? '0' : c).join(''));
 
-    const DOMAINS = ['doubleclick.net','googleadservices.com','googlesyndication.com','adservice.google.com','adnxs.com','criteo.com','pubmatic.com','rubiconproject.com']
-        .map(d => d.replace(/\./g, '\\.'));
+    const DOMAINS = [
+        // Google 相關
+        'doubleclick.net', 'googleadservices.com', 'googlesyndication.com', 'adservice.google.com', 'google-analytics.com',
+        // 社交媒體
+        'facebook.com', 'ads-twitter.com', 'ads.linkedin.com', 'ads.pinterest.com', 'ads.tiktok.com',
+        // 廣告網路
+        'adnxs.com', 'criteo.com', 'pubmatic.com', 'rubiconproject.com', 'media.net', 'adcolony.com',
+        // 分析服務
+        'hotjar.com', 'mouseflow.com', 'freshmarketer.com', 'luckyorange.com',
+        // 手機廠商
+        'samsungads.com', 'ads.oppomobile.com', 'ad.xiaomi.com', 'api-adservices.apple.com'
+    ].map(d => d.replace(/\./g, '\\.'));
 
     // 全域狀態管理
     const state = {
@@ -314,9 +334,22 @@
     Object.values(styles).forEach(style => GM_addStyle(style));
 
     // 元素封鎖處理
-    function blockElement(el, selector, isHeuristic = false) {
+    function blockElement(el, selector, isHeuristic = false, reason = '') {
         try {
             if (!el || el.classList.contains(IDs.HIDDEN) || el.classList.contains(IDs.HEURISTIC)) return;
+
+            // 檢查是否在排除列表中
+            if (state.exclusions[location.hostname]?.includes(selector)) return;
+
+            // 檢查iframe來源
+            if (el.tagName === 'IFRAME') {
+                try {
+                    const src = new URL(el.src);
+                    if (DOMAINS.some(d => src.hostname.match(d))) {
+                        reason = reason || `可疑的iframe來源: ${src.hostname}`;
+                    }
+                } catch {}
+            }
 
             if (isHeuristic) {
                 el.classList.add(IDs.HEURISTIC);
@@ -325,7 +358,8 @@
                     element: el.cloneNode(true),
                     parent: el.parentNode,
                     nextSibling: el.nextSibling,
-                    selector
+                    selector,
+                    reason: reason || '手動封鎖'
                 });
                 if (state.removed.length > 10) state.removed.shift();
                 el.classList.add(IDs.HIDDEN);
@@ -394,23 +428,58 @@
     // 計算置信度
     function calculateConfidence(el) {
         let score = 0;
+        let reasons = [];
         
         // 關鍵字匹配數
-        const text = (el.className + ' ' + el.id + ' ' + el.getAttribute('role') + ' ' + el.getAttribute('aria-label'))
+        const text = (el.className + ' ' + el.id + ' ' + 
+                     el.getAttribute('role') + ' ' + 
+                     el.getAttribute('aria-label') + ' ' +
+                     el.getAttribute('data-ad-slot') + ' ' +  // 新增: 檢查廣告相關屬性
+                     el.getAttribute('data-ad-client'))
             .toLowerCase();
-        score += KEYWORDS.filter(k => text.includes(k)).length * 0.2;
+        const matchedKeywords = KEYWORDS.filter(k => text.includes(k));
+        if (matchedKeywords.length > 0) {
+            score += matchedKeywords.length * 0.2;
+            reasons.push(`關鍵字匹配: ${matchedKeywords.join(', ')}`);
+        }
 
         // 位置評分
         const rect = el.getBoundingClientRect();
-        if (rect.top < window.innerHeight * 0.3) score += 0.1;
-        if (rect.right > window.innerWidth * 0.7) score += 0.1;
+        if (rect.top < window.innerHeight * 0.3) {
+            score += 0.1;
+            reasons.push('頂部位置');
+        }
+        if (rect.right > window.innerWidth * 0.7) {
+            score += 0.1;
+            reasons.push('右側位置');
+        }
 
         // 大小評分
         const area = rect.width * rect.height;
-        if (area > 10000 && area < 200000) score += 0.1;
+        if (area > 10000 && area < 200000) {
+            score += 0.1;
+            reasons.push('典型廣告大小');
+        }
 
-        // iframe 評分
-        if (el.tagName === 'IFRAME') score += 0.2;
+        // iframe 和腳本評分
+        if (el.tagName === 'IFRAME') {
+            score += 0.2;
+            reasons.push('iframe元素');
+            try {
+                const src = new URL(el.src);
+                if (DOMAINS.some(d => src.hostname.match(d))) {
+                    score += 0.3;
+                    reasons.push(`可疑域名: ${src.hostname}`);
+                }
+            } catch {}
+        } else if (el.tagName === 'SCRIPT') {
+            try {
+                const src = new URL(el.src);
+                if (DOMAINS.some(d => src.hostname.match(d))) {
+                    score += 0.4;
+                    reasons.push(`追蹤腳本: ${src.hostname}`);
+                }
+            } catch {}
 
         return Math.min(score, 1);
     }
