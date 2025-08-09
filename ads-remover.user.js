@@ -1,13 +1,6 @@
 // ==UserScript==
 // @name         智慧廣告攔截器 - 優化懸浮視窗版
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  優化懸浮視窗，智能提示排除，右上角還原面板，連續封鎖整合
-// @author       Enhanced Version
-// @match        *://*/*
-// ==UserScript==
-// @name         智慧廣告攔截器 - 優化懸浮視窗版
-// @namespace    http://tampermonkey.net/
 // @version      6.1
 // @description  程式結構模組化、UI/UX優化、學習系統強化
 // @author       Enhanced Version
@@ -76,58 +69,6 @@
     };
 
     // ===== showNotification（優化版） =====
-    function showNotification(message, type = 'info', duration = 3000) {
-        let container = document.getElementById('notification-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'notification-container';
-            container.style.cssText = `
-                position: fixed;
-                bottom: 20px;
-                left: 20px;
-                z-index: 10001;
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                pointer-events: none;
-            `;
-            document.body.appendChild(container);
-        }
-        const notification = document.createElement('div');
-        notification.className = `notification ${type}`;
-        notification.style.pointerEvents = 'auto';
-        notification.style.position = 'relative';
-        const icon = type === 'success' ? '✅' : type === 'info' ? 'ℹ️' : type === 'warning' ? '⚠️' : type === 'error' ? '❌' : 'ℹ️';
-        notification.innerHTML = `
-            <span style="font-size:16px">${icon}</span>
-            <span>${message}</span>
-            <button style="position:absolute;top:6px;right:8px;background:none;border:none;font-size:16px;cursor:pointer;color:#888;" title="關閉">×</button>
-        `;
-        notification.querySelector('button').onclick = () => {
-            notification.style.opacity = '0';
-            notification.style.transform = 'translateY(20px)';
-            notification.style.transition = 'all 0.3s ease-out';
-            setTimeout(() => notification.remove(), 300);
-        };
-        container.appendChild(notification);
-        if (!window.state) window.state = {};
-        if (!window.state.notifications) window.state.notifications = [];
-        window.state.notifications.push(notification);
-        if (window.state.notifications.length > 5) {
-            const oldNotification = window.state.notifications.shift();
-            oldNotification.remove();
-        }
-        setTimeout(() => {
-            notification.style.opacity = '0';
-            notification.style.transform = 'translateY(20px)';
-            notification.style.transition = 'all 0.3s ease-out';
-            setTimeout(() => notification.remove(), 300);
-        }, duration);
-        return notification;
-    }
-
-    // ...existing code...
-
     // ===== state 物件 =====
     const state = {
         heuristicBlocked: new Map(),
@@ -157,7 +98,7 @@
                 'container', 'wrapper', 'content', 'main', 'page',
                 'site-content', 'main-content'
             ]
-        }
+    }
     };
     // ...existing code...
 
